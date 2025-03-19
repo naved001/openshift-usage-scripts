@@ -3,7 +3,7 @@ kind: CronJob
 metadata:
   name: produce-report
 spec:
-  schedule: "0 13 1 * *"
+  schedule: "0 4 1,8,15,22,28 * *"
   jobTemplate:
     spec:
       template:
