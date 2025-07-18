@@ -27,21 +27,26 @@ from openshift_metrics.metrics_processor import MetricsProcessor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CPU_REQUEST = 'kube_pod_resource_request{resource="cpu", node!=""} unless on(pod, namespace) kube_pod_status_unschedulable'
-MEMORY_REQUEST = 'kube_pod_resource_request{resource="memory", node!=""} unless on(pod, namespace) kube_pod_status_unschedulable'
-GPU_REQUEST = 'kube_pod_resource_request{resource=~"nvidia.com.*", node!=""} unless on(pod, namespace) kube_pod_status_unschedulable'
-KUBE_NODE_LABELS = 'kube_node_labels{label_nvidia_com_gpu_product!=""}'
-KUBE_POD_LABELS = 'kube_pod_labels{label_nerc_mghpcc_org_class!=""}'
+STORAGE_BYTES = ('(kube_pod_spec_volumes_persistentvolumeclaims_info{cluster="nerc-ocp-prod"}'
+                 '* on (pod, namespace)'
+                 'group_left(label_nerc_mghpcc_org_class)'
+                 'max by (pod, namespace, label_nerc_mghpcc_org_class)'
+                 '(kube_pod_labels{cluster="nerc-ocp-prod", label_nerc_mghpcc_org_class!=""}))'
+                 '* on (persistentvolumeclaim, namespace) group_left() '
+                 'max by (persistentvolumeclaim, namespace) '
+                 '(kubelet_volume_stats_used_bytes{cluster="nerc-ocp-prod"}) / 1024^3'
+            )
 
 URL_CLUSTER_NAME_MAPPING = {
     "https://thanos-querier-openshift-monitoring.apps.shift.nerc.mghpcc.org": "ocp-prod",
     "https://thanos-querier-openshift-monitoring.apps.ocp-test.nerc.mghpcc.org": "ocp-test",
+    "https://grafana.apps.obs.nerc.mghpcc.org/api/datasources/proxy/1": "ocp-prod",
 }
 
 
 def main():
     """This method kick starts the process of collecting and saving the metrics"""
-
+    print(STORAGE_BYTES)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--openshift-url",
@@ -88,6 +93,7 @@ def main():
     )
 
     token = os.environ.get("OPENSHIFT_TOKEN")
+    assert token is not None, "Set the openshift token"
     prom_client = PrometheusClient(openshift_url, token)
 
     metrics_dict = {}
@@ -97,42 +103,14 @@ def main():
         args.openshift_url, args.openshift_url
     )
 
-    cpu_request_metrics = prom_client.query_metric(
-        CPU_REQUEST, report_start_date, report_end_date
-    )
-
     try:
-        pod_labels = prom_client.query_metric(
-            KUBE_POD_LABELS, report_start_date, report_end_date
+        storage_metrics = prom_client.query_metric(
+            STORAGE_BYTES, report_start_date, report_end_date
         )
-        metrics_dict["cpu_metrics"] = MetricsProcessor.insert_pod_labels(
-            pod_labels, cpu_request_metrics
-        )
+        metrics_dict["storage_metrics"] = storage_metrics
     except utils.EmptyResultError:
         logger.info(
-            f"No pod labels found for the period {report_start_date} to {report_end_date}"
-        )
-        metrics_dict["cpu_metrics"] = cpu_request_metrics
-
-    memory_request_metrics = prom_client.query_metric(
-        MEMORY_REQUEST, report_start_date, report_end_date
-    )
-    metrics_dict["memory_metrics"] = memory_request_metrics
-
-    # because if nobody requests a GPU then we will get an empty set
-    try:
-        gpu_request_metrics = prom_client.query_metric(
-            GPU_REQUEST, report_start_date, report_end_date
-        )
-        node_labels = prom_client.query_metric(
-            KUBE_NODE_LABELS, report_start_date, report_end_date
-        )
-        metrics_dict["gpu_metrics"] = MetricsProcessor.insert_node_labels(
-            node_labels, gpu_request_metrics
-        )
-    except utils.EmptyResultError:
-        logger.info(
-            f"No GPU metrics found for the period {report_start_date} to {report_end_date}"
+            f"No storage metrics found for the period {report_start_date} to {report_end_date}"
         )
         pass
 

@@ -36,6 +36,7 @@ class PrometheusClient:
 
             if response.status_code != 200:
                 print(f"{response.status_code} Response: {response.reason}")
+                import ipdb; ipdb.set_trace()
             else:
                 data = response.json()["data"]["result"]
                 if data:

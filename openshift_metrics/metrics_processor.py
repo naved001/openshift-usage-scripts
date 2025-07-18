@@ -17,85 +17,32 @@ class MetricsProcessor:
         self,
         interval_minutes: int = 15,
         merged_data: dict = None,
-        gpu_mapping_file: str = "gpu_node_map.json",
     ):
         self.interval_minutes = interval_minutes
         self.merged_data = merged_data if merged_data is not None else {}
-        self.gpu_mapping = self._load_gpu_mapping(gpu_mapping_file)
 
     def merge_metrics(self, metric_name, metric_list):
         """Merge metrics (cpu, memory, gpu) by pod"""
         for metric in metric_list:
-            pod = metric["metric"]["pod"]
+            persistentvolumeclaim = metric["metric"]["persistentvolumeclaim"]
+            volume = metric["metric"]["volume"] # this is the name that it's attached as to the pod
             namespace = metric["metric"]["namespace"]
-            node = metric["metric"].get("node")
 
             self.merged_data.setdefault(namespace, {})
-            self.merged_data[namespace].setdefault(pod, {"metrics": {}})
+            self.merged_data[namespace].setdefault(persistentvolumeclaim, {"metrics": {}})
 
-            if metric_name == "cpu_request":
-                class_name = metric["metric"].get("label_nerc_mghpcc_org_class")
-                if class_name is not None:
-                    self.merged_data[namespace][pod]["label_nerc_mghpcc_org_class"] = (
-                        class_name
-                    )
-
-            gpu_type, gpu_resource, node_model = self._extract_gpu_info(
-                metric_name, metric
-            )
+            class_name = metric["metric"].get("label_nerc_mghpcc_org_class")
+            if class_name is not None:
+                self.merged_data[namespace][persistentvolumeclaim]["label_nerc_mghpcc_org_class"] = (
+                    class_name
+                )
 
             for epoch_time, metric_value in metric["values"]:
-                self.merged_data[namespace][pod]["metrics"].setdefault(epoch_time, {})
+                self.merged_data[namespace][persistentvolumeclaim]["metrics"].setdefault(epoch_time, {})
 
-                self.merged_data[namespace][pod]["metrics"][epoch_time][metric_name] = (
+                self.merged_data[namespace][persistentvolumeclaim]["metrics"][epoch_time][metric_name] = (
                     metric_value
                 )
-                if gpu_type:
-                    self.merged_data[namespace][pod]["metrics"][epoch_time][
-                        "gpu_type"
-                    ] = gpu_type
-                if gpu_resource:
-                    self.merged_data[namespace][pod]["metrics"][epoch_time][
-                        "gpu_resource"
-                    ] = gpu_resource
-                if node_model:
-                    self.merged_data[namespace][pod]["metrics"][epoch_time][
-                        "node_model"
-                    ] = node_model
-                if node:
-                    self.merged_data[namespace][pod]["metrics"][epoch_time]["node"] = (
-                        node
-                    )
-
-    def _extract_gpu_info(self, metric_name: str, metric: Dict) -> GPUInfo:
-        """Extract GPU related info"""
-        gpu_type = None
-        gpu_resource = None
-        node_model = None
-
-        if metric_name == "gpu_request":
-            gpu_type = metric["metric"].get(
-                "label_nvidia_com_gpu_product", GPU_UNKNOWN_TYPE
-            )
-            gpu_resource = metric["metric"].get("resource")
-            node_model = metric["metric"].get("label_nvidia_com_gpu_machine")
-
-            # Sometimes GPU labels from the nodes can be missing, in that case
-            # we get the gpu_type from the gpu-node file
-            if gpu_type == GPU_UNKNOWN_TYPE:
-                node_name = metric["metric"].get("node")
-                gpu_type = self.gpu_mapping.get(node_name, GPU_UNKNOWN_TYPE)
-
-        return GPUInfo(gpu_type, gpu_resource, node_model)
-
-    @staticmethod
-    def _load_gpu_mapping(file_path: str) -> Dict[str, str]:
-        try:
-            with open(file_path, "r") as file:
-                return json.load(file)
-        except FileNotFoundError:
-            logger.warning("Could not load gpu-node map file: %s", file_path)
-            return {}
 
     def condense_metrics(self, metrics_to_check: List[str]) -> Dict:
         """
@@ -106,11 +53,11 @@ class MetricsProcessor:
         interval = self.interval_minutes * 60
         condensed_dict = {}
 
-        for namespace, pods in self.merged_data.items():
+        for namespace, pvcs in self.merged_data.items():
             condensed_dict.setdefault(namespace, {})
 
-            for pod, pod_dict in pods.items():
-                metrics_dict = pod_dict["metrics"]
+            for pvc, pvc_dict in pvcs.items():
+                metrics_dict = pvc_dict["metrics"]
                 new_metrics_dict = {}
                 epoch_times_list = sorted(metrics_dict.keys())
 
@@ -149,9 +96,9 @@ class MetricsProcessor:
                 new_metrics_dict[start_epoch_time] = start_metric_dict
 
                 # Update the pod dict with the condensed data
-                new_pod_dict = pod_dict.copy()
-                new_pod_dict["metrics"] = new_metrics_dict
-                condensed_dict[namespace][pod] = new_pod_dict
+                new_pvc_dict = pvc_dict.copy()
+                new_pvc_dict["metrics"] = new_metrics_dict
+                condensed_dict[namespace][pvc] = new_pvc_dict
 
         return condensed_dict
 

@@ -42,30 +42,6 @@ def parse_timestamp_range(timestamp_range: str) -> Tuple[datetime, datetime]:
         )
 
 
-def get_su_definitions(report_month) -> dict:
-    su_definitions = {}
-    nerc_data = nerc_rates.load_from_url()
-    su_names = ["GPUV100", "GPUA100", "GPUA100SXM4", "GPUH100", "CPU"]
-    resource_names = ["vCPUs", "RAM", "GPUs"]
-    for su_name in su_names:
-        su_definitions.setdefault(f"OpenShift {su_name}", {})
-        for resource_name in resource_names:
-            su_definitions[f"OpenShift {su_name}"][resource_name] = (
-                nerc_data.get_value_at(
-                    f"{resource_name} in {su_name} SU", report_month, Decimal
-                )
-            )
-    # Some internal SUs that I like to map to when there's insufficient data
-    su_definitions[invoice.SU_UNKNOWN_GPU] = {"GPUs": 1, "vCPUs": 8, "RAM": 64 * 1024}
-    su_definitions[invoice.SU_UNKNOWN_MIG_GPU] = {
-        "GPUs": 1,
-        "vCPUs": 8,
-        "RAM": 64 * 1024,
-    }
-    su_definitions[invoice.SU_UNKNOWN] = {"GPUs": 0, "vCPUs": 1, "RAM": 1024}
-    return su_definitions
-
-
 def main():
     """Reads the metrics from files and generates the reports"""
     parser = argparse.ArgumentParser()
@@ -75,7 +51,7 @@ def main():
         help="Name of the invoice file. Defaults to NERC OpenShift <report_month>.csv",
     )
     parser.add_argument(
-        "--pod-report-file",
+        "--pvc-report-file",
         help="Name of the pod report file. Defaults to Pod NERC OpenShift <report_month>.csv",
     )
     parser.add_argument(
@@ -94,11 +70,7 @@ def main():
         action="store_true",
         help="Use rates from the nerc-rates repo",
     )
-    parser.add_argument("--rate-cpu-su", type=Decimal)
-    parser.add_argument("--rate-gpu-v100-su", type=Decimal)
-    parser.add_argument("--rate-gpu-a100sxm4-su", type=Decimal)
-    parser.add_argument("--rate-gpu-a100-su", type=Decimal)
-    parser.add_argument("--rate-gpu-h100-su", type=Decimal)
+    parser.add_argument("--rate-storage-su", type=Decimal)
 
     args = parser.parse_args()
     files = args.files
@@ -114,13 +86,8 @@ def main():
             metrics_from_file = json.load(jsonfile)
             if cluster_name is None:
                 cluster_name = metrics_from_file.get("cluster_name")
-            cpu_request_metrics = metrics_from_file["cpu_metrics"]
-            memory_request_metrics = metrics_from_file["memory_metrics"]
-            gpu_request_metrics = metrics_from_file.get("gpu_metrics", None)
-            processor.merge_metrics("cpu_request", cpu_request_metrics)
-            processor.merge_metrics("memory_request", memory_request_metrics)
-            if gpu_request_metrics is not None:
-                processor.merge_metrics("gpu_request", gpu_request_metrics)
+            storage_metrics = metrics_from_file.get("storage_metrics", None)
+            processor.merge_metrics("storage_metrics", storage_metrics)
 
             if report_start_date is None:
                 report_start_date = metrics_from_file["start_date"]
@@ -144,80 +111,55 @@ def main():
 
     report_start_date = datetime.strptime(report_start_date, "%Y-%m-%d")
     report_end_date = datetime.strptime(report_end_date, "%Y-%m-%d")
-
     report_month = datetime.strftime(report_start_date, "%Y-%m")
 
     if args.use_nerc_rates:
         logger.info("Using nerc rates.")
         nerc_data = nerc_rates.load_from_url()
-        rates = invoice.Rates(
-            cpu=nerc_data.get_value_at("CPU SU Rate", report_month, Decimal),
-            gpu_a100=nerc_data.get_value_at("GPUA100 SU Rate", report_month, Decimal),
-            gpu_a100sxm4=nerc_data.get_value_at(
-                "GPUA100SXM4 SU Rate", report_month, Decimal
-            ),
-            gpu_v100=nerc_data.get_value_at("GPUV100 SU Rate", report_month, Decimal),
-            gpu_h100=nerc_data.get_value_at("GPUH100 SU Rate", report_month, Decimal),
-        )
+        rate_storage_su = nerc_data.get_value_at("Storage GB Rate", report_month, Decimal)
     else:
-        rates = invoice.Rates(
-            cpu=Decimal(args.rate_cpu_su),
-            gpu_a100=Decimal(args.rate_gpu_a100_su),
-            gpu_a100sxm4=Decimal(args.rate_gpu_a100sxm4_su),
-            gpu_v100=Decimal(args.rate_gpu_v100_su),
-            gpu_h100=Decimal(args.rate_gpu_h100_su),
-        )
-
+        rate_storage_su = args.rate_storage_su
+    assert rate_storage_su
     if args.invoice_file:
         invoice_file = args.invoice_file
     else:
-        invoice_file = f"NERC OpenShift {report_month}.csv"
+        invoice_file = f"NERC OpenShift Storage {report_month}.csv"
 
     if args.class_invoice_file:
         class_invoice_file = args.class_invoice_file
     else:
-        class_invoice_file = f"NERC OpenShift Classes {report_month}.csv"
+        class_invoice_file = f"NERC OpenShift Storage Classes {report_month}.csv"
 
-    if args.pod_report_file:
-        pod_report_file = args.pod_report_file
+    if args.pvc_report_file:
+        pvc_report_file = args.pvc_report_file
     else:
-        pod_report_file = f"Pod NERC OpenShift {report_month}.csv"
+        pvc_report_file = f"PVC NERC OpenShift {report_month}.csv"
 
     if report_start_date.month != report_end_date.month:
         logger.warning("The report spans multiple months")
         report_month += " to " + datetime.strftime(report_end_date, "%Y-%m")
 
     condensed_metrics_dict = processor.condense_metrics(
-        ["cpu_request", "memory_request", "gpu_request", "gpu_type"]
+        ["storage_metrics"]
     )
-
-    su_definitions = get_su_definitions(report_month)
+    utils.write_metrics_by_pvc(
+        condensed_metrics_dict=condensed_metrics_dict,
+        file_name=pvc_report_file)
     utils.write_metrics_by_namespace(
         condensed_metrics_dict=condensed_metrics_dict,
         file_name=invoice_file,
         report_month=report_month,
-        rates=rates,
-        su_definitions=su_definitions,
         cluster_name=cluster_name,
-        ignore_hours=ignore_hours,
-    )
+        rate=rate_storage_su,
+        )
     utils.write_metrics_by_classes(
         condensed_metrics_dict=condensed_metrics_dict,
         file_name=class_invoice_file,
         report_month=report_month,
-        rates=rates,
-        su_definitions=su_definitions,
-        cluster_name=cluster_name,
         namespaces_with_classes=["rhods-notebooks"],
-        ignore_hours=ignore_hours,
-    )
-    utils.write_metrics_by_pod(
-        condensed_metrics_dict,
-        pod_report_file,
-        su_definitions,
-        ignore_hours,
-    )
-
+        cluster_name=cluster_name,
+        rate=rate_storage_su,
+        )
     if args.upload_to_s3:
         bucket_name = os.environ.get("S3_INVOICE_BUCKET", "nerc-invoicing")
         primary_location = (
