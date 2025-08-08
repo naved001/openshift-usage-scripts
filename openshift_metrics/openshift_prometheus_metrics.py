@@ -88,7 +88,7 @@ def main():
     )
 
     token = os.environ.get("OPENSHIFT_TOKEN")
-    prom_client = PrometheusClient(openshift_url, token)
+    prom_client = PrometheusClient(prometheus_url=openshift_url, token=token, step_min=1)
 
     metrics_dict = {}
     metrics_dict["start_date"] = report_start_date

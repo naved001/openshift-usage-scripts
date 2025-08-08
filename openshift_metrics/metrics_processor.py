@@ -105,6 +105,7 @@ class MetricsProcessor:
         """
         interval = self.interval_minutes * 60
         condensed_dict = {}
+        logger.info(f"interval is set to {interval} seconds")
 
         for namespace, pods in self.merged_data.items():
             condensed_dict.setdefault(namespace, {})

@@ -29,7 +29,7 @@ class PrometheusClient:
         session = requests.Session()
         session.mount("https://", HTTPAdapter(max_retries=retries))
 
-        logger.info(f"Retrieving metric: {metric}")
+        logger.info(f"Retrieving metric: {metric} at {self.step_min} minute frequency")
 
         for _ in range(3):
             response = session.get(url, headers=headers, verify=True)

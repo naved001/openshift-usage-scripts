@@ -107,7 +107,7 @@ def main():
     report_start_date = None
     report_end_date = None
     cluster_name = None
-    processor = MetricsProcessor()
+    processor = MetricsProcessor(interval_minutes=1)
 
     for file in files:
         with open(file, "r") as jsonfile:
